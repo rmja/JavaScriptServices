@@ -23,8 +23,13 @@ namespace Microsoft.AspNetCore.NodeServices {
             lock (this.clientAccessLock) {
                 if (this.pipeRpcClient == null) {
                     this.pipeRpcClient = new PipeRpcClient(this.pipeName);
+                    this.pipeRpcClient.OnReceiveException += (ex) => {
+                        // TODO: Also log the exception. Need to change the chain of calls up to this point to supply
+                        // an ILogger or IServiceProvider etc.                        
+                        this.ExitNodeProcess(); // We'll restart it next time there's a request to it
+                    };
                 }
-                
+
                 resultTask = this.pipeRpcClient.Invoke<T>("invoke", invocationInfo);
             }
             

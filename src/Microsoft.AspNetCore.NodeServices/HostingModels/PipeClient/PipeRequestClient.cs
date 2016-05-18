@@ -15,7 +15,9 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
         public bool IsServerDisconnected {
             get { return this.pipeClient.IsServerDisconnected; }
         }
-        
+
+        internal PipeClientReceiveException OnReceiveException;
+
         private PipeClient pipeClient;
         private Dictionary<string, TaskCompletionSource<string>> outstandingRequests
          = new Dictionary<string, TaskCompletionSource<string>>();
@@ -27,6 +29,15 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
             this.pipeClient.ReceivedLine += this.PipeClientReceivedLine;
             this.pipeClient.ServerDisconnected += () => {
                 this.AbortAllOutstandingRequests("The server has disconnected");
+            };
+
+            // Propagate exceptions from the underlying receive loop. Such exceptions refer to infrastructure-level failures,
+            // not application RPC exceptions.
+            this.pipeClient.OnReceiveException += (ex) => {
+                var evt = this.OnReceiveException;
+                if (evt != null) {
+                    evt(ex);
+                }
             };
         }
 
@@ -49,7 +60,13 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
                 this.outstandingRequests.Add(reqId, tcs);
             }
             
-            this.pipeClient.SendAsync($"{ reqId }:{ requestData }");
+            this.pipeClient.SendAsync($"{ reqId }:{ requestData }").ContinueWith((task) => {
+                // If we failed to send the request, propagate the exception via the TaskCompletionSource
+                var responseTcs = this.GetAndRemoveOutstandingRequest(reqId);
+                if (responseTcs != null) {
+                    responseTcs.SetException(task.Exception);
+                }
+            }, TaskContinuationOptions.OnlyOnFaulted);
             
             return tcs.Task;
         }
@@ -62,6 +79,14 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
             }
             
             var messageId = line.Substring(0, colonIndex);
+            var responseTcs = this.GetAndRemoveOutstandingRequest(messageId);
+            if (responseTcs != null) {
+                var responsePayload = line.Substring(colonIndex + 1);
+                responseTcs.SetResult(responsePayload);
+            }
+        }
+        
+        private TaskCompletionSource<string> GetAndRemoveOutstandingRequest(string messageId) {
             TaskCompletionSource<string> responseTcs;
             lock (this.outstandingRequests) {
                 if (this.outstandingRequests.TryGetValue(messageId, out responseTcs)) {
@@ -69,10 +94,7 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
                 }
             }
             
-            if (responseTcs != null) {
-                var responsePayload = line.Substring(colonIndex + 1);
-                responseTcs.SetResult(responsePayload);
-            }
+            return responseTcs;
         }
         
         private void AbortAllOutstandingRequests(string message) {

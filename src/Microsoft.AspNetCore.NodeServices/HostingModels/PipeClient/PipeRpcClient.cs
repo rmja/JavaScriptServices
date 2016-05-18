@@ -18,6 +18,8 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
      * to support a fast .NET->Node RPC mechanism. 
      */
      internal class PipeRpcClient : IDisposable {
+        internal event PipeClientReceiveException OnReceiveException;
+         
         private readonly static JsonSerializerSettings jsonSerializerSettings =  new JsonSerializerSettings {
             ContractResolver = new CamelCasePropertyNamesContractResolver()
         };
@@ -30,8 +32,17 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
 
         public PipeRpcClient(string address) {
             this.pipeRequestClient = new PipeRequestClient(address);
+
+            // Propagate exceptions from the underlying receive loop. Such exceptions refer to infrastructure-level failures,
+            // not application RPC exceptions.
+            this.pipeRequestClient.OnReceiveException += (ex) => {
+                var evt = this.OnReceiveException;
+                if (evt != null) {
+                    evt(ex);
+                }
+            };
         }
-        
+
         public async Task<TResult> Invoke<TResult>(string method, params object[] args) {
             var requestJson = JsonConvert.SerializeObject(new {
                 Method = method,
@@ -67,11 +78,13 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
         }
         #endregion
         
+        #pragma warning disable 649 // These properties are populated via JSON deserialization
         private class PipeRpcResponse<TResult> {
             public TResult Result;
             public string ErrorMessage;
             public string ErrorDetails;
         }
+        #pragma warning restore 649
     }
 
     internal class PipeRpcClientException : Exception {

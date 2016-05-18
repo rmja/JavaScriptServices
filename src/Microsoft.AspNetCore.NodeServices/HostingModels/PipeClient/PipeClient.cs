@@ -10,7 +10,8 @@ using System.Threading.Tasks;
 namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
     internal delegate void PipeClientReceivedLineHandler(string line);
     internal delegate void ServerDisconnectedHandler();
-    
+    internal delegate void PipeClientReceiveException(Exception ex);
+
     /**
      * A thread-safe network client that sends and receives lines of UTF-8 text.
      * On Windows, the transport is Named Pipes; on Linux/OSX it's Unix Domain Sockets.
@@ -21,10 +22,10 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
     internal class PipeClient : IDisposable {
         public bool IsServerDisconnected { get; private set; }
         public event ServerDisconnectedHandler ServerDisconnected;
-        
         public event PipeClientReceivedLineHandler ReceivedLine;
-        private bool useNamedPipes;
+        public event PipeClientReceiveException OnReceiveException;
 
+        private bool useNamedPipes;
         private ConfiguredTaskAwaitable<bool> connected;
         private Socket unixSocket;
         private NamedPipeClientStream windowsNamedPipeClientStream;
@@ -33,11 +34,12 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
         private StreamWriter streamWriter;
         private StreamReader streamReader;
         private SemaphoreSlim streamWriterSemaphore = new SemaphoreSlim(1);
+        private Exception isFaultedWithException;
         
         public PipeClient(string address) {
             this.useNamedPipes = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
             this.disposalCancellationTokenSource = new CancellationTokenSource();
-            
+
             var connectionTcs = new TaskCompletionSource<bool>();
             this.connected = connectionTcs.Task.ConfigureAwait(false);
             this.ConnectAsync(address).ContinueWith(connectionTask => {
@@ -72,6 +74,10 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
         }
         
         public async Task SendAsync(string message) {
+            if (this.isFaultedWithException != null) {
+                throw new AggregateException("The PipeClient has already disconnected due to an exception in the receive loop", this.isFaultedWithException);
+            }
+
             await this.connected;
             
             // TODO: Is it necessary to serialise WriteLineAsync calls like this? IIRC the Socket class at least allows
@@ -85,32 +91,47 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
             }
         }
 
-        private async Task BeginReceiveLoop() {
-            while (true) {
-                string line;
-                try {
-                    line = await this.streamReader.ReadLineAsync();    
-                } catch (ObjectDisposedException) {
-                    // Client disconnected
-                    return;
-                }
-                
-                if (line == null) {
-                    // Server disconnected
-                    this.IsServerDisconnected = true;
-                    var serverDisconnectedEvt = this.ServerDisconnected;
-                    if (serverDisconnectedEvt != null) {
-                        serverDisconnectedEvt();
+        // This is 'async void' because it's purely an event loop. Nothing should listen for any result from any returned
+        // task. Exceptions need to be reported via another channel, which in this case is the OnReceiveException event.
+        // This doesn't include application-level exceptions (such as a PipeRpcClient invocation failing with a remote
+        // exception) - those are handled as part of the RPC protocol. This only includes more severe system-level exceptions. 
+        private async void BeginReceiveLoop() {
+            try {
+                while (true) {
+                    string line;
+                    try {
+                        line = await this.streamReader.ReadLineAsync();    
+                    } catch (ObjectDisposedException) {
+                        // Client disconnected
+                        return;
                     }
                     
-                    return;
-                } else {
-                    // Actually received a line
-                    var evt = this.ReceivedLine;
-                    if (evt != null) {
-                        evt(line);
+                    if (line == null) {
+                        // Server disconnected
+                        this.IsServerDisconnected = true;
+                        var serverDisconnectedEvt = this.ServerDisconnected;
+                        if (serverDisconnectedEvt != null) {
+                            serverDisconnectedEvt();
+                        }
+                        
+                        return;
+                    } else {
+                        // Actually received a line
+                        var evt = this.ReceivedLine;
+                        if (evt != null) {
+                            evt(line);
+                        }
                     }
                 }
+            } catch (Exception ex) {
+                // Since this is async void, for the important reason described above, we need to report exceptions
+                // via another channel rather than a returned Task.
+                var evt = this.OnReceiveException;
+                if (evt != null) {
+                    evt(ex);
+                }
+                this.isFaultedWithException = ex;
+                this.Dispose(true);
             }
         }
 

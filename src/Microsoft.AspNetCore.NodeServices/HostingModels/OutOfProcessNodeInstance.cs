@@ -52,6 +52,12 @@ namespace Microsoft.AspNetCore.NodeServices {
             });
         }
 
+        protected void ExitNodeProcess() {
+            if (this._nodeProcess != null && !this._nodeProcess.HasExited) {
+                this._nodeProcess.Kill(); // TODO: Is there a more graceful way to end it? Or does this still let it perform any cleanup?
+            }
+        }
+
         protected async Task EnsureReady() {
             lock (this._childProcessLauncherLock) {
                 if (this._nodeProcess == null || this._nodeProcess.HasExited) {
@@ -142,9 +148,7 @@ namespace Microsoft.AspNetCore.NodeServices {
                     this._entryPointScript.Dispose();
                 }
 
-                if (this._nodeProcess != null && !this._nodeProcess.HasExited) {
-                    this._nodeProcess.Kill(); // TODO: Is there a more graceful way to end it? Or does this still let it perform any cleanup?
-                }
+                this.ExitNodeProcess();
 
                 disposed = true;
             }
