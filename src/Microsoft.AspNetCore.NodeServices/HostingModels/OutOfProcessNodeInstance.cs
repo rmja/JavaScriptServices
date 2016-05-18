@@ -32,6 +32,11 @@ namespace Microsoft.AspNetCore.NodeServices {
             this._projectPath = projectPath;
             this._commandLineArguments = commandLineArguments ?? string.Empty;
         }
+        
+        public string CommandLineArguments {
+            get { return this._commandLineArguments; }
+            set { this._commandLineArguments = value; }
+        }
 
         public abstract Task<T> Invoke<T>(NodeInvocationInfo invocationInfo);
 
@@ -50,6 +55,7 @@ namespace Microsoft.AspNetCore.NodeServices {
         protected async Task EnsureReady() {
             lock (this._childProcessLauncherLock) {
                 if (this._nodeProcess == null || this._nodeProcess.HasExited) {
+                    this.OnBeforeLaunchProcess();
                     var startInfo = new ProcessStartInfo("node") {
                         Arguments = "\"" + this._entryPointScript.FileName + "\" " + this._commandLineArguments,
                         UseShellExecute = false,
@@ -72,7 +78,6 @@ namespace Microsoft.AspNetCore.NodeServices {
                     startInfo.Environment.Add("NODE_PATH", nodePathValue);
                     #endif
 
-                    this.OnBeforeLaunchProcess();
                     this._nodeProcess = Process.Start(startInfo);
                     this.ConnectToInputOutputStreams();
                 }

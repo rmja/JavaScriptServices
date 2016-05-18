@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.PlatformAbstractions;
 using Microsoft.AspNetCore.Hosting;
 
 namespace Microsoft.AspNetCore.NodeServices {
@@ -31,6 +30,8 @@ namespace Microsoft.AspNetCore.NodeServices {
             {
                 case NodeHostingModel.Http:
                     return new HttpNodeInstance(options.ProjectPath, /* port */ 0, watchFileExtensions);
+                case NodeHostingModel.Pipe:
+                    return new PipeNodeInstance(options.ProjectPath, watchFileExtensions);
                 case NodeHostingModel.InputOutputStream:
                     return new InputOutputStreamNodeInstance(options.ProjectPath);
                 default:
