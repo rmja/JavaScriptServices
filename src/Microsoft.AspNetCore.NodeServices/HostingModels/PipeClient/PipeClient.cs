@@ -1,8 +1,9 @@
 using System;
 using System.IO;
-//using System.IO.Pipes; // TODO: Add back when System.IO.Pipes is referenceable
+using System.IO.Pipes;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,33 +19,28 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
      * to support a fast .NET->Node RPC mechanism. 
      */
     internal class PipeClient : IDisposable {
-        // TODO: Remove the ability to choose platform. This should be determined by which platform
-        // you're actually running on.
-        public enum Platform {
-            Windows,
-            Unix
-        }
-
         public bool IsServerDisconnected { get; private set; }
         public event ServerDisconnectedHandler ServerDisconnected;
         
         public event PipeClientReceivedLineHandler ReceivedLine;
+        private bool useNamedPipes;
 
         private ConfiguredTaskAwaitable<bool> connected;
         private Socket unixSocket;
-        // private NamedPipeClientStream windowsNamedPipeClientStream; // TODO: Add back when System.IO.Pipes is referenceable
+        private NamedPipeClientStream windowsNamedPipeClientStream;
         private CancellationTokenSource disposalCancellationTokenSource;
         private NetworkStream networkStream;
         private StreamWriter streamWriter;
         private StreamReader streamReader;
         private SemaphoreSlim streamWriterSemaphore = new SemaphoreSlim(1);
         
-        public PipeClient(string address, Platform platform) {
+        public PipeClient(string address) {
+            this.useNamedPipes = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
             this.disposalCancellationTokenSource = new CancellationTokenSource();
             
             var connectionTcs = new TaskCompletionSource<bool>();
             this.connected = connectionTcs.Task.ConfigureAwait(false);
-            this.ConnectAsync(address, platform).ContinueWith(connectionTask => {
+            this.ConnectAsync(address).ContinueWith(connectionTask => {
                 if (connectionTask.IsFaulted) {
                     connectionTcs.SetException(connectionTask.Exception);
                 } else {
@@ -57,19 +53,22 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
             }, TaskContinuationOptions.RunContinuationsAsynchronously);
         }
         
-        private async Task<Stream> ConnectAsync(string address, Platform platform) {
-            if (platform == Platform.Windows) {
-                throw new PlatformNotSupportedException("Cannot currently reference System.IO.Pipes. Will add back support shortly.");
-                //this.windowsNamedPipeClientStream = new NamedPipeClientStream(".", address, PipeDirection.InOut);
-                //await this.windowsNamedPipeClientStream.ConnectAsync(this.disposalCancellationTokenSource.Token).ConfigureAwait(false);
-                //return this.windowsNamedPipeClientStream;
-            } else {
-                var endPoint = new UnixDomainSocketEndPoint("/tmp/" + address);
-                this.unixSocket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Unspecified);
-                await this.unixSocket.ConnectAsync(endPoint).ConfigureAwait(false);
-                this.networkStream = new NetworkStream(this.unixSocket);
-                return this.networkStream;
-            }
+        private Task<Stream> ConnectAsync(string address) {
+            return this.useNamedPipes ? this.ConnectAsyncNamedPipe(address) : this.ConnectAsyncUnixDomainSocket(address);
+        }
+        
+        private async Task<Stream> ConnectAsyncNamedPipe(string address) {
+            this.windowsNamedPipeClientStream = new NamedPipeClientStream(".", address, PipeDirection.InOut);
+            await this.windowsNamedPipeClientStream.ConnectAsync(this.disposalCancellationTokenSource.Token).ConfigureAwait(false);
+            return this.windowsNamedPipeClientStream;
+        }
+        
+        private async Task<Stream> ConnectAsyncUnixDomainSocket(string address) {
+            var endPoint = new UnixDomainSocketEndPoint("/tmp/" + address);
+            this.unixSocket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Unspecified);
+            await this.unixSocket.ConnectAsync(endPoint).ConfigureAwait(false);
+            this.networkStream = new NetworkStream(this.unixSocket);
+            return this.networkStream;
         }
         
         public async Task SendAsync(string message) {
@@ -138,10 +137,9 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
                         this.networkStream.Dispose();
                     }                
 
-                    // TODO: Add back when System.IO.Pipes is referenceable
-                    //if (this.windowsNamedPipeClientStream != null) {
-                    //    this.windowsNamedPipeClientStream.Dispose();
-                    //}
+                    if (this.useNamedPipes) {
+                        this.DisposeWindowsNamedPipeClientStream();
+                    }
                     
                     if (this.unixSocket != null) {
                         this.unixSocket.Dispose();
@@ -149,6 +147,12 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
                 }
 
                 disposedValue = true;
+            }
+        }
+        
+        private void DisposeWindowsNamedPipeClientStream() {
+            if (this.windowsNamedPipeClientStream != null) {
+                this.windowsNamedPipeClientStream.Dispose();
             }
         }
 

@@ -23,8 +23,7 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
         private int nextRequestId;
         
         public PipeRequestClient(string address) {
-            // TODO: Don't have platform as a param; detect it in PipeClient
-            this.pipeClient = new PipeClient(address, PipeClient.Platform.Unix);
+            this.pipeClient = new PipeClient(address);
             this.pipeClient.ReceivedLine += this.PipeClientReceivedLine;
             this.pipeClient.ServerDisconnected += () => {
                 this.AbortAllOutstandingRequests("The server has disconnected");
