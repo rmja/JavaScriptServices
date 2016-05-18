@@ -14,9 +14,6 @@ if (parsedArgs.watch) {
 
 var server = net.createServer()
     .on('listening', function() {
-        // TODO: Remove this
-        console.log('Listening on ' + server.address());
-
         // Signal to the NodeServices base class that we're ready to accept invocations
         console.log('[Microsoft.AspNetCore.NodeServices:Listening]');        
     })
