@@ -85,7 +85,12 @@ namespace Microsoft.AspNetCore.NodeServices.HostingModels.PipeClient {
             // more than one thread at a time.
             await this.streamWriterSemaphore.WaitAsync(this.disposalCancellationTokenSource.Token).ConfigureAwait(false);
             try {
-                await this.streamWriter.WriteLineAsync(message).ConfigureAwait(false);
+                if (this.useNamedPipes) {
+                    // Workaround: NamedPipeClientStream hangs forever if you use WriteLineAsync
+                    this.streamWriter.WriteLine(message);
+                } else {
+                    await this.streamWriter.WriteLineAsync(message).ConfigureAwait(false);
+                }
             } finally {
                 this.streamWriterSemaphore.Release();
             }

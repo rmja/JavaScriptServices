@@ -4,9 +4,10 @@ var fs = require('fs');
 var net = require('net');
 var path = require('path');
 var readline = require('readline');
+var useWindowsNamedPipes = /^win/.test(process.platform);
 
 var parsedArgs = parseArgs(process.argv);
-var listenAddress = '/tmp/' + parsedArgs.pipename;
+var listenAddress = (useWindowsNamedPipes ? '\\\\.\\pipe\\' : '/tmp/') + parsedArgs.pipename;
 
 if (parsedArgs.watch) {
     autoQuitOnFileChange(process.cwd(), parsedArgs.watch.split(','));
